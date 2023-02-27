@@ -16,6 +16,7 @@ SLEEP = int(os.environ.get("NMAP_COLLECTOR_INTERVAL",30))
 PORT = int(os.environ.get("NMAP_COLLECTOR_PORT",8000))
 IP_RANGE = os.environ.get("NMAP_COLLECTOR_IP_RANGE",'192.168.0.0/24')
 GROUP_NAME = os.environ.get("NMAP_COLLECTOR_GROUP_NAME", "")
+SCAN_METHOD = os.environ.get("NMAP_COLLECTOR_SCAN_METHOD", "-F")
 
 
 
@@ -57,7 +58,7 @@ class NmapMetrics(object):
         filename = f"/tmp/nmap-{time.time()}"
 
         subprocess.Popen(
-            ["nmap", "-oX", filename, "-d3", "-F", IP_RANGE],
+            ["nmap", "-oX", filename, "-d3", SCAN_METHOD, IP_RANGE],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         ).wait()
