@@ -15,6 +15,7 @@ REQUEST_TIME = Summary('request_processing_seconds', 'Time spent processing requ
 SLEEP = int(os.environ.get("NMAP_COLLECTOR_INTERVAL",30))
 PORT = int(os.environ.get("NMAP_COLLECTOR_PORT",8000))
 IP_RANGE = os.environ.get("NMAP_COLLECTOR_IP_RANGE",'192.168.0.0/24')
+GROUP_NAME = os.environ.get("NMAP_COLLECTOR_GROUP_NAME", "")
 
 
 
@@ -28,12 +29,12 @@ class NmapMetrics(object):
         self.ping = GaugeMetricFamily(
             'nmap_ping_srtt_ms',
             'Ping times of all network devices (devices are labels)',
-            labels=["hostname", "ip_address"]
+            labels=["hostname", "ip_address", "group"]
         )
         self.state = GaugeMetricFamily(
             'nmap_port_state',
             'Discovered port state of network devices (devices are labels)',
-            labels=["hostname", "ip_address", "proto", "portid", "service", "status"]
+            labels=["hostname", "ip_address", "group", "proto", "portid", "service", "status"]
         )
 
     def run_metrics_loop(self):
@@ -81,7 +82,7 @@ class NmapMetrics(object):
                 ping_time = int(n.find("times").attrib["srtt"]) / 1000
             except:
                 ping_time = 0
-            self.ping.add_metric([hostname, address], ping_time)
+            self.ping.add_metric([hostname, address, GROUP_NAME], ping_time)
 
             ports = n.find("ports")
             if ports:
@@ -100,7 +101,7 @@ class NmapMetrics(object):
                         elif status == 'unfiltered':
                             stat = -1 
                         logging.debug(f"PORT proto: {proto} portid: {portid} service: {service} status: {status} / {stat}")
-                        self.state.add_metric( [hostname, address, proto, portid, service, status], stat )
+                        self.state.add_metric( [hostname, address, GROUP_NAME, proto, portid, service, status], stat )
                     except:
                         pass
 
