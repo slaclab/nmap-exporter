@@ -64,7 +64,7 @@ class NmapMetrics(object):
     def fetch(self):
 
         start_time = timeit.default_timer()
-        logging.info(f"scanning {GROUP_NAME} {IP_RANGE}")
+        logging.debug(f"scanning group {GROUP_NAME}: {IP_RANGE}")
 
         with tempfile.TemporaryDirectory( ) as tmpdir:
             filename = os.path.join( tmpdir, 'nmap.xml' )
@@ -78,10 +78,11 @@ class NmapMetrics(object):
                 stderr=subprocess.PIPE,
             )
 
-            for l in str(p.stdout).split('\\n'):
-                logging.debug( f"out> {l}" )
-            for l in str(p.stderr).split('\\n'):
-                logging.debug( f"err> {l}" )
+            if VERBOSE:
+                for l in str(p.stdout).split('\\n'):
+                    logging.debug( f"out> {l}" )
+                for l in str(p.stderr).split('\\n'):
+                    logging.debug( f"err> {l}" )
 
             done_scanning_time = timeit.default_timer()
             scan_duration = done_scanning_time - start_time
@@ -104,9 +105,10 @@ class NmapMetrics(object):
 
         assert os.path.isfile( filepath )
 
-        with open( filepath ) as f:
-            for l in f.readlines():
-                logging.debug(f"xml> {l.rstrip()}")
+        if VERBOSE:
+            with open( filepath ) as f:
+                for l in f.readlines():
+                    logging.debug(f"xml> {l.rstrip()}")
 
         root = ElementTree.parse(filepath).getroot()
         for n in root.findall("host"):
@@ -152,13 +154,14 @@ class NmapMetrics(object):
 
                         # ssl expiry
                         exp = port.find('.//table[@key="validity"]/elem[@key="notAfter"]')
-                        #logging.debug(f" TLS {exp.text}")
-                        dt = datetime.datetime.strptime( exp.text, "%Y-%m-%dT%H:%M:%S")
-                        epoch = ( dt - UNIX_EPOCH ).total_seconds()
-                        #logging.debug(f" TLS {epoch}")
-                        self.tls.add_metric( [hostname, address, GROUP_NAME, proto, portid, service, status], epoch )
+                        #logging.debug(f" TLS {exp}")
+                        if hasattr( exp, 'text' ):
+                            dt = datetime.datetime.strptime( exp.text, "%Y-%m-%dT%H:%M:%S")
+                            epoch = ( dt - UNIX_EPOCH ).total_seconds()
+                            #logging.debug(f" TLS {epoch}")
+                            self.tls.add_metric( [hostname, address, GROUP_NAME, proto, portid, service, status], epoch )
                     except Exception as e:
-                        logging.warn(f"could not parse: {e}")
+                        logging.debug(f"could not parse: {e}")
 
 
 def main():
