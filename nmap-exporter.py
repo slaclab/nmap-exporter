@@ -3,12 +3,14 @@
 from prometheus_client import start_http_server, Summary, REGISTRY
 from prometheus_client.core import GaugeMetricFamily, REGISTRY
 import time
+import timeit
 import subprocess
+import tempfile
 import os
+import datetime
 from xml.etree import ElementTree
 import logging
 
-logging.basicConfig(level=logging.INFO)
 
 REQUEST_TIME = Summary('request_processing_seconds', 'Time spent processing request')
 
@@ -18,7 +20,11 @@ IP_RANGE = os.environ.get("NMAP_COLLECTOR_IP_RANGE",'192.168.0.0/24')
 GROUP_NAME = os.environ.get("NMAP_COLLECTOR_GROUP_NAME", "")
 SCAN_METHOD = os.environ.get("NMAP_COLLECTOR_SCAN_METHOD", "-F")
 
+VERBOSE = bool(os.environ.get("NMAP_COLLECTOR_VERBOSE",False))
 
+logging.basicConfig(level=logging.DEBUG if VERBOSE else logging.INFO)
+
+UNIX_EPOCH = datetime.datetime( 1970, 1, 1)
 
 class NmapMetrics(object):
 
@@ -37,8 +43,14 @@ class NmapMetrics(object):
             'Discovered port state of network devices (devices are labels)',
             labels=["hostname", "ip_address", "group", "proto", "portid", "service", "status"]
         )
+        self.tls = GaugeMetricFamily(
+            'nmap_tls_expiry',
+            'Epoch time of tls enabled service',
+            labels=["hostname", "ip_address", "group", "proto", "portid", "service", "epochTime" ]
+        )
 
     def run_metrics_loop(self):
+        self.reset_metrics()
         while True:
             self.fetch()
             time.sleep( self.polling_interval )
@@ -46,24 +58,57 @@ class NmapMetrics(object):
     def collect(self):
         yield self.ping
         yield self.state
+        yield self.tls
 
     @REQUEST_TIME.time()
     def fetch(self):
 
-        # purge items
-        self.reset_metrics()
+        start_time = timeit.default_timer()
+        logging.info(f"scanning {GROUP_NAME} {IP_RANGE}")
 
-        logging.info("scanning")
+        with tempfile.TemporaryDirectory( ) as tmpdir:
+            filename = os.path.join( tmpdir, 'nmap.xml' )
+            cmd = ["nmap", "-oX", filename, "-d3" ]
+            cmd += SCAN_METHOD.split() 
+            cmd += IP_RANGE.split() 
+            logging.debug( f"Executing {' '.join(cmd)}" ) 
+            p = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
 
-        filename = f"/tmp/nmap-{time.time()}"
+            for l in str(p.stdout).split('\\n'):
+                logging.debug( f"out> {l}" )
+            for l in str(p.stderr).split('\\n'):
+                logging.debug( f"err> {l}" )
 
-        subprocess.Popen(
-            ["nmap", "-oX", filename, "-d3", SCAN_METHOD, IP_RANGE],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        ).wait()
+            done_scanning_time = timeit.default_timer()
+            scan_duration = done_scanning_time - start_time
 
-        root = ElementTree.parse(filename).getroot()
+            # purge items
+            self.reset_metrics()
+
+            # construct metrics
+            self.parse( filename )
+
+            end_time = timeit.default_timer()
+            processing_duration = end_time - done_scanning_time
+    
+            total_duration = end_time - start_time
+
+            logging.info(f"cycle completed in {total_duration:.2f}s ({scan_duration:.2f}s + {processing_duration:.2f}s)")
+
+
+    def parse( self, filepath ):
+
+        assert os.path.isfile( filepath )
+
+        with open( filepath ) as f:
+            for l in f.readlines():
+                logging.debug(f"xml> {l.rstrip()}")
+
+        root = ElementTree.parse(filepath).getroot()
         for n in root.findall("host"):
             address = n.find("address").attrib["addr"]
             hostname = None
@@ -75,7 +120,7 @@ class NmapMetrics(object):
                     hostname = address
             except:
                 hostname = address
-            logging.info(f"found node {address} ({hostname})")
+            logging.debug(f"NODE {address} ({hostname})")
 
             # parse ping
             ping_time = None
@@ -83,6 +128,7 @@ class NmapMetrics(object):
                 ping_time = int(n.find("times").attrib["srtt"]) / 1000
             except:
                 ping_time = 0
+            logging.debug(f" PING {ping_time}")
             self.ping.add_metric([hostname, address, GROUP_NAME], ping_time)
 
             ports = n.find("ports")
@@ -101,13 +147,18 @@ class NmapMetrics(object):
                             stat = -2
                         elif status == 'unfiltered':
                             stat = -1 
-                        logging.debug(f"PORT proto: {proto} portid: {portid} service: {service} status: {status} / {stat}")
+                        logging.debug(f" PORT proto: {proto} portid: {portid} service: {service} status: {status} / {stat}")
                         self.state.add_metric( [hostname, address, GROUP_NAME, proto, portid, service, status], stat )
-                    except:
-                        pass
 
-        os.remove(filename)
-        logging.info("scan completed")
+                        # ssl expiry
+                        exp = port.find('.//table[@key="validity"]/elem[@key="notAfter"]')
+                        #logging.debug(f" TLS {exp.text}")
+                        dt = datetime.datetime.strptime( exp.text, "%Y-%m-%dT%H:%M:%S")
+                        epoch = ( dt - UNIX_EPOCH ).total_seconds()
+                        #logging.debug(f" TLS {epoch}")
+                        self.tls.add_metric( [hostname, address, GROUP_NAME, proto, portid, service, status], epoch )
+                    except Exception as e:
+                        logging.warn(f"could not parse: {e}")
 
 
 def main():
