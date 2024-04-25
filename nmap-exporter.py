@@ -140,8 +140,12 @@ class NmapMetrics(object):
                     try:
                         proto = port.attrib["protocol"]
                         portid = port.attrib["portid"]
-                        service = port.find("service").attrib["name"]
                         status = port.find("state").attrib["state"]
+                        service = 'unknown'
+                        try:
+                            service = port.find("service").attrib["name"]
+                        except:
+                            pass
                         stat = 0
                         if status == 'open':
                             stat = 1
