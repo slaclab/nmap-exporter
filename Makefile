@@ -17,3 +17,6 @@ build:
 push:
 	$(CONTAINER_RT) push $(REPO):$(TAG)
  
+test-bash: venv pip
+	$(CONTAINER_RT) build -t $(REPO):test .
+	$(CONTAINER_RT) run -it $(REPO):test bash
