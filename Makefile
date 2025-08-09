@@ -2,14 +2,18 @@ CONTAINER_RT ?= podman
 REPO ?= slaclab/nmap-exporter
 TAG ?= latest
 
-venv:
-	python3 -m venv .
+default: pytest
 
-pip:
-	./bin/pip3 install -r requirements.txt
+venv:
+	mkdir -p .venv
+	python3 -m venv .venv
+
+pip: venv
+	.venv/bin/pip3 install -r requirements.txt
 
 clean:
-	rm -rf bin include lib  lib64
+	rm -rf .venv
+	rm -rf ./__pycache__
 
 build:
 	$(CONTAINER_RT) build -t $(REPO):$(TAG) .
@@ -21,11 +25,11 @@ push:
 #######################
 # tests
 #######################
-pip-pytest:
-	./bin/pip3 install -r requirements-pytest.txt
+pip-pytest: venv
+	.venv/bin/pip3 install -r requirements-pytest.txt
 
-pytest:
-	./bin/
+pytest: pip-pytest
+	.venv/bin/pytest ./
 
 test-bash: venv pip
 	$(CONTAINER_RT) build -t $(REPO):test .
