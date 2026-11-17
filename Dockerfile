@@ -1,4 +1,4 @@
-FROM python:3.9-slim-buster
+FROM python:3.13-slim-trixie
 
 RUN mkdir /app
 ADD nmap-exporter.py /app/nmap-exporter.py
