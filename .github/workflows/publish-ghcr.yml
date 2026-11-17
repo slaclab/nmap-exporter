@@ -1,0 +1,127 @@
+name: Build and Publish nmap-exporter
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+# Run one build/publish workflow at a time.
+# Queue subsequent runs instead of replacing pending ones.
+concurrency:
+  group: ghcr-publish-main
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Build and publish to GHCR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout merged commit
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: true
+
+      - name: Generate image metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          DATE=$(date -u +'%Y%m%d')
+
+          # Unique even when the same workflow is rerun.
+          VERSION="${DATE}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          echo "Image: $IMAGE"
+          echo "Version: $VERSION"
+          echo "Commit: $GITHUB_SHA"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish an immutable-style, unique version first.
+      # Do not update latest during this step.
+      - name: Build and push versioned image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.metadata.outputs.image }}:${{ steps.metadata.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.metadata.outputs.version }}
+
+      # Check the remote branch before moving latest.
+      # Older builds retain their versioned tags.
+      - name: Update latest if this is current main
+        shell: bash
+        env:
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          BUILT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          CURRENT_SHA=$(
+            git ls-remote origin refs/heads/main | cut -f1
+          )
+
+          if [[ -z "$CURRENT_SHA" ]]; then
+            echo "::error::Could not resolve origin/main"
+            exit 1
+          fi
+
+          echo "Current main: $CURRENT_SHA"
+          echo "Built commit: $BUILT_SHA"
+
+          if [[ "$CURRENT_SHA" == "$BUILT_SHA" ]]; then
+            echo "Publishing latest"
+
+            docker buildx imagetools create \
+              --tag "${IMAGE}:latest" \
+              "${IMAGE}@${DIGEST}"
+          else
+            echo "A newer commit exists on main."
+            echo "Skipping latest; versioned image is retained."
+          fi
+
+      - name: Publish build summary
+        shell: bash
+        env:
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "## GHCR Image Published"
+            echo ""
+            echo "- Image: \`${IMAGE}\`"
+            echo "- Version: \`${VERSION}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Digest: \`${DIGEST}\`"
+            echo ""
+            echo "The latest tag is updated only when the"
+            echo "built commit matches the current main."
+          } >> "$GITHUB_STEP_SUMMARY"
